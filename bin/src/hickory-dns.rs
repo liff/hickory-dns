@@ -16,6 +16,10 @@
 //!       --workers <WORKERS>  Number of runtime workers, defaults to the number of CPU cores
 //!       -q, --quiet              Disable INFO messages, WARN and ERROR will remain
 //!       -d, --debug              Turn on `DEBUG` messages (default is only `INFO`)
+//!           --logging <LOGGING>  Set target for logging [default: stderr]
+//!                                Possible values:
+//!                                  - stderr:  Print formatted logs to standard error
+//!                                  - journal: Send structured logs to systemd journal (requires the `systemd` feature)
 //!       -c, --config <NAME>      Path to configuration file of named server [default: /etc/named.toml]
 //!       -z, --zonedir <DIR>      Path to the root directory for all zone files, see also config toml
 //!       -p, --port <PORT>        Listening port for DNS queries, overrides any value in config file
@@ -32,9 +36,9 @@ use clap::Parser;
 use tikv_jemallocator::Jemalloc;
 use tokio::runtime;
 use tracing::{Level, info};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
-use hickory_dns::DnsServer;
+use hickory_dns::{DnsServer, Logging};
 
 /// Main method for running the named server.
 fn main() -> Result<(), String> {
@@ -58,9 +62,18 @@ fn run() -> Result<(), String> {
         _ => Level::INFO,
     };
 
+    let output_layer = match args.logging {
+        Logging::Stderr => tracing_subscriber::fmt::layer().boxed(),
+
+        #[cfg(feature = "systemd")]
+        Logging::Journal => tracing_journald::layer()
+            .map_err(|err| format!("failed to initialize systemd journal logging: {err}"))?
+            .boxed(),
+    };
+
     // Setup tracing for logging based on input
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(output_layer)
         .with(
             EnvFilter::builder()
                 .with_default_directive(level.into())
